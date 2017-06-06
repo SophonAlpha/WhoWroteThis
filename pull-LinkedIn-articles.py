@@ -18,14 +18,13 @@ import json
 wait_timeout = 60
 scroll_down_wait = 1
 
-def start_webdriver():
-    browser_to_use = 'Firefox'
+def start_webdriver(browser_to_use):
     if browser_to_use == 'Firefox':
-        print('Starting Geckodriver ...')
-        browser = webdriver.Firefox(executable_path='C:\Program Files\Geckodriver\geckodriver.exe')
+        browser = webdriver.Firefox(
+             executable_path='C:\Program Files\eckodriver\geckodriver.exe')
     if browser_to_use == 'Chrome':
-        print('Starting Chromedriver ...')
-        browser = webdriver.Chrome('C:\Program Files (x86)\Google\Chromedriver\chromedriver.exe')
+        browser = webdriver.Chrome(
+            executable_path='C:\Program Files (x86)\Google\Chromedriver\chromedriver.exe')
     browser.get('http://www.linkedin.com/')
     return(browser)
 
@@ -50,15 +49,16 @@ def wait_for_element(browser, element_xpath):
 
 def get_author_articles_url(browser, author_url):
     browser.get(author_url)
-    # scroll down only a bit, if we go straight to the bottom of the page 
-    # we won't reveal the 'Articles & Activity' section
+    # Scroll down only a bit. If we go straight to the bottom of the page 
+    # we won't reveal the 'Articles & Activity' section.
     browser.execute_script("window.scrollTo(0, document.body.scrollHeight/6);")
     no_of_articles_element = wait_for_element(browser, '//a[@data-control-name="recent_activity_posts_all"]') 
     no_of_articles_text = no_of_articles_element.text
     m = re.search(r'(?P<number>[0-9]+)', no_of_articles_text)
-    # the 'number' is in addition to the one article on the users profile page, 
-    # therefore + 1
-    no_of_articles = int(m.group('number')) + 1
+    # The 'number' is in addition to the one article on the users profile page. 
+    # Therefore + 1.
+    no_of_articles_on_users_profile_page = 1 
+    no_of_articles = int(m.group('number')) + no_of_articles_on_user_profile_page
     author_articles_url = no_of_articles_element.get_attribute('href')
     return {'no of articles': no_of_articles, 'author articles url': author_articles_url}
 
@@ -85,7 +85,7 @@ def extract_article_urls(article_list):
     return article_links
 
 if __name__ == "__main__":
-    browser = start_webdriver()
+    browser = start_webdriver('Firefox')
     auto_login(browser)
     a = get_author_articles_url(browser, 'https://www.linkedin.com/in/travisbradberry/')
     article_links = get_article_urls(browser, a['author articles url'], a['no of articles'])
