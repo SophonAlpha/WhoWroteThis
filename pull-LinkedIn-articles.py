@@ -1,8 +1,8 @@
-'''
-Created on 1 Jun 2017
-
-@author: H155936
-'''
+# -----------------------------------------------------------------------------
+# Created on 1 Jun 2017
+# 
+# @author: H155936
+# -----------------------------------------------------------------------------
 
 from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
@@ -14,9 +14,6 @@ import time
 import re
 import os
 import json
-
-wait_timeout = 60
-scroll_down_wait = 1
 
 class LinkedInArticleCollector:
     
@@ -46,11 +43,13 @@ class LinkedInArticleCollector:
         sign_in_button.click()
         self.wait_for_element('//a[@data-control-name="identity_profile_photo"]')
 
-    def wait_for_element(self, element_xpath):
-        element = WebDriverWait(self.browser, wait_timeout).until(
-            EC.presence_of_element_located((By.XPATH, element_xpath)))
-        return element
-
+    def get_article_urls(self, author_url):
+        a = self.get_author_articles_url(author_url)
+        self.browser.get(a['author articles url'])
+        article_list = self.build_complete_article_page(a['no of articles'])
+        article_links = self.extract_article_urls(article_list)
+        return article_links
+    
     def get_author_articles_url(self, author_url):
         self.browser.get(author_url)
         # Scroll down only a bit. If we go straight to the bottom of the page 
@@ -66,18 +65,12 @@ class LinkedInArticleCollector:
         author_articles_url = no_of_articles_element.get_attribute('href')
         return {'no of articles': no_of_articles, 'author articles url': author_articles_url}
 
-    def get_article_urls(self, author_articles_url, no_of_articles):
-        self.browser.get(author_articles_url)
-        article_list = self.build_complete_article_page(no_of_articles)
-        article_links = self.extract_article_urls(article_list)
-        return article_links
-    
     def build_complete_article_page(self, no_of_articles):
         while True:
             self.browser.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             article_list = self.browser.find_elements_by_tag_name('article')
             no_of_articles_on_page = len(article_list)
-            time.sleep(scroll_down_wait)
+            time.sleep(self.scroll_down_wait)
             if no_of_articles_on_page == no_of_articles:
                 break
         return article_list
@@ -88,14 +81,19 @@ class LinkedInArticleCollector:
             article_links.append(article.find_element_by_tag_name('a').get_attribute('href'))
         return article_links
     
+    def wait_for_element(self, element_xpath):
+        element = WebDriverWait(self.browser, self.wait_timeout).until(
+            EC.presence_of_element_located((By.XPATH, element_xpath)))
+        return element
+
     def close(self):
         self.browser.quit()
 
 if __name__ == "__main__":
     LinkedIn = LinkedInArticleCollector()
-    a = LinkedIn.get_author_articles_url('https://www.linkedin.com/in/travisbradberry/')
-    article_links = LinkedIn.get_article_urls(a['author articles url'], a['no of articles'])
+#    a = LinkedIn.get_author_articles_url('https://www.linkedin.com/in/travisbradberry/')
+    article_links = LinkedIn.get_article_urls('https://www.linkedin.com/in/travisbradberry/')
     for link in article_links:
         print(link)
-    print('%i articles found\n' % a['no of articles'])
+    print('%i articles found\n' % len(article_links))
     LinkedIn.close()
