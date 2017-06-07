@@ -47,8 +47,8 @@ class LinkedInArticleCollector:
         a = self.get_author_articles_url(author_url)
         self.browser.get(a['author articles url'])
         article_list = self.build_complete_article_page(a['no of articles'])
-        article_links = self.extract_article_urls(article_list)
-        return article_links
+        self.article_links = self.extract_article_urls(article_list)
+        return self.article_links
     
     def get_author_articles_url(self, author_url):
         self.browser.get(author_url)
@@ -76,10 +76,20 @@ class LinkedInArticleCollector:
         return article_list
     
     def extract_article_urls(self, article_list):
-        article_links = []
+        self.article_links = []
         for article in article_list:
-            article_links.append(article.find_element_by_tag_name('a').get_attribute('href'))
-        return article_links
+            self.article_links.append(article.find_element_by_tag_name('a').get_attribute('href'))
+        return self.article_links
+    
+    def get_article_text(self, article_url):
+        self.browser.get(article_url)
+        article = {'author': self.browser.find_element_by_xpath('//span[@itemprop="name"]').text,
+                   'headline': self.browser.find_element_by_xpath('//h1[@itemprop="headline"]').text,
+                   'body': self.browser.find_element_by_xpath('//div[@itemprop="articleBody"]').text}
+        return article
+
+    def save_in_file(self, article):
+        pass
     
     def wait_for_element(self, element_xpath):
         element = WebDriverWait(self.browser, self.wait_timeout).until(
@@ -91,9 +101,9 @@ class LinkedInArticleCollector:
 
 if __name__ == "__main__":
     LinkedIn = LinkedInArticleCollector()
-#    a = LinkedIn.get_author_articles_url('https://www.linkedin.com/in/travisbradberry/')
     article_links = LinkedIn.get_article_urls('https://www.linkedin.com/in/travisbradberry/')
     for link in article_links:
-        print(link)
-    print('%i articles found\n' % len(article_links))
+        article_text = LinkedIn.get_article_text(link)
+        LinkedIn.save_in_file(article_text)
+    print('%i articles found\n' % len(self.article_links))
     LinkedIn.close()
