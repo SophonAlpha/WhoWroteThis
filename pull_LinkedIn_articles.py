@@ -8,6 +8,7 @@ from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import WebDriverException
 import queue
 from threading import Thread
 from threading import Event
@@ -15,6 +16,9 @@ import time
 import re
 import os
 import json
+
+AUTHORS_FILE = 'list_of_authors_short.txt'
+ARTICLES_FILE = 'articles.json'
 
 # ------------------- Parallel Processing --------------------------------------
 
@@ -30,8 +34,7 @@ class Dispatcher:
         pass
     
     def run(self):
-        authors_file = 'list_of_authors_short.txt'
-        with open(authors_file, 'r') as f:
+        with open(AUTHORS_FILE, 'r') as f:
             authors = f.readlines()
         for author_url in authors:
             self.Qs['jobQ'].put(author_url)
@@ -74,9 +77,11 @@ class Collator(Thread):
         Thread.__init__(self)
         self.stop_signal = Event()
         self.Qs = Qs
+        open(ARTICLES_FILE, 'w').close()
         print('%s collator initialised' %self.getName())
     
     def setup(self):
+        # any setup tasks
         pass
     
     def run(self):
@@ -89,7 +94,7 @@ class Collator(Thread):
                     break
             else:
                 print('received {0} articles from {1}'.format(len(result), result[0]['author']))
-                with open('articles.json', 'a') as f:
+                with open(ARTICLES_FILE, 'a') as f:
                     json.dump(result, f)
                 self.Qs['resultQ'].task_done()
             
@@ -113,6 +118,7 @@ class Worker(Thread):
         print('%s worker initialised' %self.getName())
 
     def setup(self):
+        # any setup tasks
         pass
 
     def run(self):
@@ -179,13 +185,25 @@ class LinkedInArticleCollector:
     
     def get_article_urls(self, author_url):
         a = self.get_author_articles_url(author_url)
-        self.browser.get(a['author articles url'])
+        try:
+            self.browser.get(a['author articles url'])
+        except WebDriverException as err:
+            if err.msg.find('Reached error page:') >= 0:
+                print('encountered WebDriverException trying to continue. {0}'.format(err.msg))
+            else:
+                raise err
         article_list = self.build_complete_article_page(a['no of articles'])
         self.article_links = self.extract_article_urls(article_list)
         return self.article_links
     
     def get_author_articles_url(self, author_url):
-        self.browser.get(author_url)
+        try:
+            self.browser.get(author_url)
+        except WebDriverException as err:
+            if err.msg.find('Reached error page:') >= 0:
+                print('encountered WebDriverException trying to continue. {0}'.format(err.msg))
+            else:
+                raise err
         # Scroll down only a bit. If we go straight to the bottom of the page 
         # we won't reveal the 'Articles & Activity' section.
         self.browser.execute_script('window.scrollTo(0, document.body.scrollHeight/6);')
@@ -230,5 +248,7 @@ class LinkedInArticleCollector:
 # ------------------- Main -----------------------------------------------------
 
 if __name__ == "__main__":
-    d = Dispatcher(num_of_workers=1)
+    print('Start')
+    d = Dispatcher(num_of_workers=3)
     d.run()
+    print('Done!')
