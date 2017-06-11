@@ -9,7 +9,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 import queue
-import threading
+from threading import Thread
+from threading import Event
 import time
 import re
 import os
@@ -19,151 +20,141 @@ import json
 
 class Dispatcher:
     
-    def __init__(self, Job_Descriptor, num_of_workers=3):
+    def __init__(self, num_of_workers=3):
         self.num_of_workers = num_of_workers
-        self.job_description = Job_Descriptor()
         self.Qs = {'jobQ': queue.Queue(), 'resultQ':queue.Queue()}
-        self.setup_collator(Job_Descriptor)
-        self.setup_workers(Job_Descriptor)
+        self.setup_collator()
+        self.setup_workers()
         self.start_collator()
         self.start_workers()
         pass
     
     def run(self):
-        job = self.job_description.get_job()
-        while True:
-            try:
-                author_url = job.__next__()
-            except StopIteration:
-#                self.stop_workers()
-#                self.stop_collator()
-                break
-            else:
-                self.Qs['jobQ'].put(author_url)
+        authors_file = 'list_of_authors_short.txt'
+        with open(authors_file, 'r') as f:
+            authors = f.readlines()
+        for author_url in authors:
+            self.Qs['jobQ'].put(author_url)
+        self.wait_till_queues_empty(self.Qs)
+        self.stop_workers()
+        self.stop_collator()
 
-    def setup_collator(self, Job_Descriptor):
-        self.collator = Collator(self.Qs, Job_Descriptor)
+    def setup_collator(self):
+        self.collator = Collator(self.Qs)
 
     def start_collator(self):
-        self.collator.get_thread().start()
+        self.collator.start()
         
     def stop_collator(self):
-        self.collator.get_thread().stop()
+        self.collator.stop()
+        self.collator.join()
     
-    def setup_workers(self, Job_Descriptor):
+    def setup_workers(self):
         self.worker_pool = []
         for _ in range(self.num_of_workers):
-            worker = Worker(self.Qs, Job_Descriptor)
+            worker = Worker(self.Qs)
             self.worker_pool.append(worker)
 
     def start_workers(self):
         for worker in self.worker_pool:
-            worker.get_thread().start()
+            worker.start()
 
     def stop_workers(self):
         for worker in self.worker_pool:
-            worker.stop_worker()
-            worker.get_thread().join()
+            worker.stop()
+            worker.join()
 
-class Collator:
+    def wait_till_queues_empty(self, waitQs):
+        for waitQ in waitQs:
+            waitQs[waitQ].join()
+
+class Collator(Thread):
     
-    def __init__(self, Qs, Job_Descriptor):
-        self.jd = Job_Descriptor()
-        self.jd.setup_collator()
+    def __init__(self, Qs):
+        Thread.__init__(self)
+        self.stop_signal = Event()
         self.Qs = Qs
-        self.thread = threading.Thread(target=self.run)
-        self.thread_name = self.thread.getName()
-        print('%s collator initialised' %self.thread_name)
+        print('%s collator initialised' %self.getName())
+    
+    def setup(self):
+        pass
     
     def run(self):
         while True:
-            result = self.Qs['resultQ'].get()
-            self.jd.process_result(result)
-
-    def get_thread(self):
-        return self.thread    
-
-class Worker:
-
-    def __init__(self, Qs, Job_Descriptor):
-        self.jd = Job_Descriptor()
-        self.jd.setup_worker()
-        self.Qs = Qs
-        self.thread = threading.Thread(target=self.run)
-        self.thread_name = self.thread.getName()
-        print('%s worker initialised' %self.thread_name)
-
-    def run(self):
-        while True:
-            author_url = self.Qs['jobQ'].get()
-            articles = self.jd.process_job(author_url)
-            self.Qs['resultQ'].put(articles)
+            try:
+                result = self.Qs['resultQ'].get(block=False)
+            except queue.Empty:
+                if self.is_stopped():
+                    self.shutdown()
+                    break
+            else:
+                print('received {0} articles from {1}'.format(len(result), result[0]['author']))
+                with open('articles.json', 'a') as f:
+                    json.dump(result, f)
+                self.Qs['resultQ'].task_done()
             
-    def stop_worker(self):
-        self.jd.stop_worker()
-            
-    def get_thread(self):
-        return self.thread
-
-# ------------------- Job Descriptor -------------------------------------------
-
-class JobDescriptor():
-
-    def __init__(self):
-        pass
-
-    def setup_collator(self):
-        # initialisation tasks that the collator needs to perform
-        pass
-
-    def stop_collator(self):
-        # tear down tasks that the collator needs to perform
-        pass
+    def stop(self):
+        self.stop_signal.set()
+        
+    def is_stopped(self):
+        return self.stop_signal.is_set()
     
-    def setup_worker(self):
-        # initialisation tasks that every worker needs to perform
+    def shutdown(self):
+        # any clean up tasks before we terminate the thread
+        pass
+
+class Worker(Thread):
+
+    def __init__(self, Qs):
+        Thread.__init__(self)
+        self.stop_signal = Event()
         self.LinkedIn = LinkedInArticleCollector()
-        
-    def stop_worker(self):
-        # tear down tasks that every worker needs to perform
-        self.LinkedIn.close()
-        
-    def get_job(self):
-        # function used by Dispatcher to get jobs for workers
-#        authors_file = 'list_of_authors_short.txt'
-        authors_file = 'list_of_authors.txt'
-        with open(authors_file, 'r') as f:
-            authors = f.readlines()
-        for author in authors:
-            yield author 
-    
-    def process_job(self, author_url):
-        # entry function to be called by Worker with the job details
-        articles = self.LinkedIn.get_articles(author_url)
-        return articles
-        
-    def process_result(self, articles):
-        # entry function to be called by the collator. 
-        # Describes what to do with the results from the workers
-        print('received %i articles' %len(articles))
-        with open('articles.json', 'a') as f:
-            json.dump(articles, f)
+        self.Qs = Qs
+        print('%s worker initialised' %self.getName())
 
-# ------------------- LinkedIn Article Collector--------------------------------
+    def setup(self):
+        pass
+
+    def run(self):
+        self.LinkedIn.start_webdriver()
+        self.LinkedIn.auto_login()
+        while True:
+            try:
+                author_url = self.Qs['jobQ'].get(block=False)
+            except queue.Empty:
+                if self.is_stopped():
+                    self.shutdown()
+                    break
+            else:
+                articles = articles = self.LinkedIn.get_articles(author_url)
+                self.Qs['resultQ'].put(articles)
+                self.Qs['jobQ'].task_done()
+            
+    def stop(self):
+        self.stop_signal.set()
+        
+    def is_stopped(self):
+        return self.stop_signal.is_set()
+    
+    def shutdown(self):
+        # any clean up tasks before we terminate the thread
+        self.LinkedIn.close()
+        pass
+
+# ------------------- LinkedIn Article Collector -------------------------------
 
 class LinkedInArticleCollector:
     
     def __init__(self, browserType='Firefox'):
         self.wait_timeout = 60
         self.scroll_down_wait = 1
-        self.start_webdriver(browserType)
-        self.auto_login()
+        self.browserType = browserType
 
-    def start_webdriver(self, browserType):
-        if browserType == 'Firefox':
+    def start_webdriver(self):
+        if self.browserType == 'Firefox':
             self.browser = webdriver.Firefox(
                  executable_path='C:\Program Files\Geckodriver\geckodriver.exe')
-        if browserType == 'Chrome':
+        if self.browserType == 'Chrome':
             self.browser = webdriver.Chrome(
                 executable_path='C:\Program Files (x86)\Google\Chromedriver\chromedriver.exe')
         self.browser.get('http://www.linkedin.com/')
@@ -201,10 +192,6 @@ class LinkedInArticleCollector:
         no_of_articles_element = self.wait_for_element('//a[@data-control-name="recent_activity_posts_all"]')
         no_of_articles_text = no_of_articles_element.text
         m = re.search(r'(?P<number>[0-9]+)', no_of_articles_text)
-#        # The 'number' is in addition to the one article on the users profile page. 
-#        # Therefore + 1.
-#        no_of_articles_on_user_profile_page = 1 
-#        no_of_articles = int(m.group('number')) + no_of_articles_on_user_profile_page
         no_of_articles = int(m.group('number'))
         author_articles_url = no_of_articles_element.get_attribute('href')
         return {'no of articles': no_of_articles, 'author articles url': author_articles_url}
@@ -240,6 +227,8 @@ class LinkedInArticleCollector:
     def close(self):
         self.browser.quit()
 
+# ------------------- Main -----------------------------------------------------
+
 if __name__ == "__main__":
-    d = Dispatcher(Job_Descriptor=JobDescriptor, num_of_workers=3)
+    d = Dispatcher(num_of_workers=1)
     d.run()
