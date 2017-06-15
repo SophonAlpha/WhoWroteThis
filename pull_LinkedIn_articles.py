@@ -37,10 +37,10 @@ class Dispatcher:
         pass
     
     def run(self):
-        with open(AUTHORS_FILE, 'r') as f:
-            authors = f.readlines()
-        for author_url in authors:
-            self.Qs['jobQ'].put(author_url)
+        with open(ARTICLES_URLS_FILE, 'r') as f:
+            articles_urls = json.load(f)
+        for article_url in articles_urls:
+            self.Qs['jobQ'].put(article_url['article_url'])
         self.wait_till_queues_empty(self.Qs)
         self.stop_workers()
         self.stop_collator()
@@ -80,7 +80,6 @@ class Collator(Thread):
         Thread.__init__(self)
         self.stop_signal = Event()
         self.Qs = Qs
-        open(ARTICLES_FILE, 'w').close()
         print('%s collator initialised' %self.getName())
     
     def setup(self):
@@ -96,9 +95,10 @@ class Collator(Thread):
                     self.shutdown()
                     break
             else:
-                print('received {0} articles from {1}'.format(len(result), result[0]['author']))
+                print('received article "{0}" from {1}'.format(result['headline'], result['author']))
                 with open(ARTICLES_FILE, 'a') as f:
-                    json.dump(result, f)
+                    out = json.dumps(result)
+                    f.write(out + '\n')
                 self.Qs['resultQ'].task_done()
             
     def stop(self):
@@ -118,7 +118,16 @@ class Worker(Thread):
         self.stop_signal = Event()
         self.LinkedIn = LinkedInArticleCollector()
         self.Qs = Qs
+        self.existing_articles = self.load_existing_articles(ARTICLES_FILE)
         print('%s worker initialised' %self.getName())
+
+    def load_existing_articles(self, articles_file):
+        existing_articles = []
+        with open(articles_file, 'r') as f:
+            ea = f.readlines()
+        for article in ea:
+            existing_articles.append(json.loads(article)['url'])
+        return existing_articles
 
     def setup(self):
         # any setup tasks
@@ -129,14 +138,15 @@ class Worker(Thread):
         self.LinkedIn.auto_login()
         while True:
             try:
-                author_url = self.Qs['jobQ'].get(block=False)
+                article_url = self.Qs['jobQ'].get(block=False)
             except queue.Empty:
                 if self.is_stopped():
                     self.shutdown()
                     break
             else:
-                articles = self.LinkedIn.get_articles(author_url)
-                self.Qs['resultQ'].put(articles)
+                if not article_url in self.existing_articles:
+                    article = self.LinkedIn.get_article(article_url)
+                    self.Qs['resultQ'].put(article)
                 self.Qs['jobQ'].task_done()
             
     def stop(self):
@@ -301,7 +311,8 @@ class LinkedInArticleCollector:
         Download one article.
         '''
         self.browser.get(article_url)
-        article = {'author': self.browser.find_element_by_xpath('//span[@itemprop="name"]').text,
+        article = {'url': article_url,
+                   'author': self.browser.find_element_by_xpath('//span[@itemprop="name"]').text,
                    'headline': self.browser.find_element_by_xpath('//h1[@itemprop="headline"]').text,
                    'body': self.browser.find_element_by_xpath('//div[@itemprop="articleBody"]').text}
         return article
@@ -326,10 +337,10 @@ if __name__ == "__main__":
         LinkedIn.auto_login()        
         LinkedIn.save_article_urls()
         LinkedIn.close()
-    if False:
+    if True:
         # Run this part when downloading the articles. This requires the list
         # of article URLs to be build beforehand.
-        d = Dispatcher(num_of_workers=1)
+        d = Dispatcher(num_of_workers=3)
         d.run()
     elapsedTime = time.time() - startTime
     print('Done! Runtime: {0} seconds'.format(elapsedTime))
