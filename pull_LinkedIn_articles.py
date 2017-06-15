@@ -16,8 +16,11 @@ import time
 import re
 import os
 import json
+from pathlib import Path
 
-AUTHORS_FILE = 'list_of_authors_short.txt'
+# AUTHORS_FILE = 'list_of_authors_short.txt'
+AUTHORS_FILE = 'list_of_authors.txt'
+ARTICLES_URLS_FILE = 'article_urls.json'
 ARTICLES_FILE = 'articles.json'
 
 # ------------------- Parallel Processing --------------------------------------
@@ -132,7 +135,7 @@ class Worker(Thread):
                     self.shutdown()
                     break
             else:
-                articles = articles = self.LinkedIn.get_articles(author_url)
+                articles = self.LinkedIn.get_articles(author_url)
                 self.Qs['resultQ'].put(articles)
                 self.Qs['jobQ'].task_done()
             
@@ -176,31 +179,88 @@ class LinkedInArticleCollector:
         sign_in_button.click()
         self.wait_for_element('//a[@data-control-name="identity_profile_photo"]')
 
+    def save_article_urls(self):
+        current_article_urls = self.load_current_article_urls()
+        author_urls = self.load_authors()
+        author_urls = self.remove_authors_already_covered(author_urls, current_article_urls)
+        self.write_article_urls_to_file(author_urls, current_article_urls)
+
+    def load_current_article_urls(self):
+        if Path(ARTICLES_URLS_FILE).exists():
+            with open(ARTICLES_URLS_FILE, 'r') as f:
+                article_addresses = json.load(f)
+        else:
+            article_addresses = []
+        return article_addresses
+
+    def load_authors(self):
+        with open(AUTHORS_FILE, 'r') as f:
+            authors = f.readlines()
+        return authors
+
+    def remove_authors_already_covered(self, author_urls, current_article_urls):
+        reduced_list = []
+        author_urls_already_covered = list(set([article_url['author_url'] for article_url in current_article_urls]))
+        for author_url in author_urls:
+            if author_url in author_urls_already_covered:
+                pass
+            else:
+                reduced_list.append(author_url)
+        return reduced_list
+
+    def write_article_urls_to_file(self, author_urls, current_article_urls):
+        for author_url in author_urls:
+            article_urls = self.get_author_articles_urls(author_url)
+            for article_url in article_urls:
+                current_article_urls.append({'author_url': author_url,
+                                          'article_url': article_url})
+            with open(ARTICLES_URLS_FILE, 'w') as f:
+                json.dump(current_article_urls, f)
+
     def get_articles(self, author_url):
+        ''' 
+        Download all articles for a particular author. The author's LinkedIn
+        url needs to be given as argument.
+        Return list of articles.
+        '''
         articles = []
-        article_links = self.get_article_urls(author_url)
+        article_links = self.get_author_articles_urls(author_url)
         for link in article_links:
             articles.append(self.get_article(link))
         return articles
     
-    def get_article_urls(self, author_url):
-        a = self.get_author_articles_url(author_url)
+    def get_author_articles_urls(self, author_url):
+        '''
+        Navigate to the authors list of articles.
+        Return list of all URLs to articles for the author.
+        '''
+        articles_page = self.get_author_articles_page(author_url)
         try:
-            self.browser.get(a['author articles url'])
+            self.browser.get(articles_page['author articles page'])
         except WebDriverException as err:
             if err.msg.find('Reached error page:') >= 0:
+                # Occasionally elements of the LinkedIn page are not loaded and articles_page
+                # "server side reset" exception is thrown by the WebDriver.
+                # This exception handler catches and ignores this.
                 print('encountered WebDriverException trying to continue. {0}'.format(err.msg))
             else:
                 raise err
-        article_list = self.build_complete_article_page(a['no of articles'])
-        self.article_links = self.extract_article_urls(article_list)
+        article_list = self.build_complete_articles_list_page(articles_page['no of articles'])
+        self.article_links = self.extract_articles_urls(article_list)
         return self.article_links
     
-    def get_author_articles_url(self, author_url):
+    def get_author_articles_page(self, author_url):
+        '''
+        Navigate to the author's LinkedIn page.
+        Return number of articles and the link to the author's article page.
+        '''
         try:
             self.browser.get(author_url)
         except WebDriverException as err:
             if err.msg.find('Reached error page:') >= 0:
+                # Occasionally elements of the LinkedIn page are not loaded and a
+                # "server side reset" exception is thrown by the WebDriver.
+                # This exception handler catches and ignores this.
                 print('encountered WebDriverException trying to continue. {0}'.format(err.msg))
             else:
                 raise err
@@ -211,10 +271,13 @@ class LinkedInArticleCollector:
         no_of_articles_text = no_of_articles_element.text
         m = re.search(r'(?P<number>[0-9]+)', no_of_articles_text)
         no_of_articles = int(m.group('number'))
-        author_articles_url = no_of_articles_element.get_attribute('href')
-        return {'no of articles': no_of_articles, 'author articles url': author_articles_url}
+        author_articles_page = no_of_articles_element.get_attribute('href')
+        return {'no of articles': no_of_articles, 'author articles page': author_articles_page}
 
-    def build_complete_article_page(self, no_of_articles):
+    def build_complete_articles_list_page(self, no_of_articles):
+        '''
+        Build complete list of articles by scrolling down until list is complete.
+        '''
         while True:
             self.browser.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             article_list = self.browser.find_elements_by_tag_name('article')
@@ -224,13 +287,19 @@ class LinkedInArticleCollector:
                 break
         return article_list
     
-    def extract_article_urls(self, article_list):
+    def extract_articles_urls(self, article_url_list):
+        '''
+        Extract the articles URLs.
+        '''
         self.article_links = []
-        for article in article_list:
-            self.article_links.append(article.find_element_by_tag_name('a').get_attribute('href'))
+        for article_url in article_url_list:
+            self.article_links.append(article_url.find_element_by_tag_name('a').get_attribute('href'))
         return self.article_links
     
     def get_article(self, article_url):
+        '''
+        Download one article.
+        '''
         self.browser.get(article_url)
         article = {'author': self.browser.find_element_by_xpath('//span[@itemprop="name"]').text,
                    'headline': self.browser.find_element_by_xpath('//h1[@itemprop="headline"]').text,
@@ -248,7 +317,19 @@ class LinkedInArticleCollector:
 # ------------------- Main -----------------------------------------------------
 
 if __name__ == "__main__":
+    startTime = time.time()
     print('Start')
-    d = Dispatcher(num_of_workers=3)
-    d.run()
-    print('Done!')
+    if False:
+        # Run this part to build the list of article URLs.
+        LinkedIn = LinkedInArticleCollector()
+        LinkedIn.start_webdriver()
+        LinkedIn.auto_login()        
+        LinkedIn.save_article_urls()
+        LinkedIn.close()
+    if False:
+        # Run this part when downloading the articles. This requires the list
+        # of article URLs to be build beforehand.
+        d = Dispatcher(num_of_workers=1)
+        d.run()
+    elapsedTime = time.time() - startTime
+    print('Done! Runtime: {0} seconds'.format(elapsedTime))
