@@ -17,10 +17,11 @@ ARTICLES_FILE = 'articles.json'
 
 # TODO: "bags of words"
 # TODO: word bigrams
-# TODO: remove '...' signs from word count
 
 def cleanup_text(text):
     replacement_specification = [
+        # fix sentence that end before quotation mark, 'sent_tokenize' doesn't recognise these
+        (r'.”', '.”.'),
         # remove 'about the author' sections
         (r'ABOUT BRIAN AND AHA!(.*\s*)*', ''),
         (r'ABOUT THE AUTHOR(.*\s*)*', ''),
@@ -28,6 +29,9 @@ def cleanup_text(text):
         (r'If you liked this article and want more content to help you transform into a better leader, join the Radiate community by clicking here.', ''),
         (r'For more, read my book, Driver in the Driverless Car, follow me on Twitter: @wadhwa, and visit my website: www.wadhwa.com', ''),
         (r'“Better Off” is sponsored by Betterment.(.*\s*)*', ''),
+        (r'For more, go to JillonMoney.com', ''),
+        (r'For more, go to Jill on Money', ''),
+        (r'Image by Flickr User(.*\s*)*', ''),
         (r'Dustin McKissen is the founder(.*\s*)*', '')]
     for pattern in replacement_specification:
         text = re.sub(pattern[0], pattern[1], text)
@@ -45,56 +49,81 @@ def get_article_metrics(article_lines):
         print('processing article {0} of {1}'.format(idx, num_articles))
         article_json = json.loads(article)
         article_json['body'] = cleanup_text(article_json['body'])
-        sentences = tokenize_sentences(article_json['body'])
-        article_words = tokenize_words(sentences)
-        data = pd.DataFrame(data = {'author': [article_json['author']],
-                                    'body': [article_json['body']],
-                                    'total_number_of_sentences': [article_words.shape[0]],
-                                    'total_number_of_words': [article_words.sum(axis=0)],
-                                    'number_of_words_each_sentence': [article_words],
-                                    'number_of_words_sentence_mean': [article_words.mean(axis='index')],
-                                    'number_of_words_sentence_median': [article_words.median(axis='index')],
-                                    'number_of_words_sentence_min': [article_words.min(axis='index')],
-                                    'number_of_words_sentence_max': [article_words.max(axis='index')]})
+        paragraphs = split_paragraphs(article_json['body'])
+        sentences = tokenize_sentences(paragraphs)
+        article_words, sentences_words = tokenize_words(sentences)
+        data = pd.DataFrame(data = {
+            'author': [article_json['author']],
+            'body': [article_json['body']], # raw text of the article 
+            'sentences_words': [sentences_words], # list of words nested in list of sentences
+            'headline': [article_json['headline']],
+            'url': [article_json['url']],
+            'total_number_of_sentences': [article_words.shape[0]],
+            'total_number_of_words': [article_words.sum(axis=0)],
+            'number_of_words_each_sentence': [article_words],
+            'number_of_words_sentence_mean': [article_words.mean(axis='index')],
+            'number_of_words_sentence_median': [article_words.median(axis='index')],
+            'number_of_words_sentence_min': [article_words.min(axis='index')],
+            'number_of_words_sentence_max': [article_words.max(axis='index')]})
         articles_list = articles_list.append(data, ignore_index = True)
     return articles_list
 
-def tokenize_sentences(article_text):
-    sentences = sent_tokenize(article_text)
+def split_paragraphs(text):
+    paragraphs = [p for p in text.split('\n')]
+    return paragraphs
+
+def tokenize_sentences(paragraphs):
+    sentences = []
+    for p in paragraphs:
+        sentences.extend(sent_tokenize(p))
     return sentences
 
 def tokenize_words(sentences):
     words_per_sentence = []
+    sentences_words = []
     for sent in sentences:
         words = word_tokenize(sent)
         # remove punctuation from word list
-        words = [w for w in words if not re.fullmatch('[' + string.punctuation + ']', w)]
+        words = [w for w in words if not re.fullmatch('[' + string.punctuation + '’“‘”–…' ']', w)]
         words_per_sentence.append(words.__len__())
+        sentences_words.append(words)
     article_words = pd.Series(data=words_per_sentence)
-    return article_words
+    return article_words, sentences_words
 
 def save_data_frame_to_disk(articles_list):
-    articles_list.to_pickle('articles.pickle')
+    articles_list.to_pickle('articles.pickle', compression='gzip')
 
 def load_data_frame_from_disk():
-    return pd.read_pickle('articles.pickle')
+    return pd.read_pickle('articles.pickle', compression='gzip')
+
+def get_articles_with_longest_sentences(articles_list, num):
+    longest_sentence_articles = articles_list.sort_values('number_of_words_sentence_max',
+                                                          ascending = False).head(num)
+    for index, row in longest_sentence_articles.iterrows():
+        print('author: {0}, url: {1}'.format(row.author, row.url))
+        print('max sentence length: {0}'.format(int(row.number_of_words_sentence_max)))
+        max_value_idx = row.number_of_words_each_sentence.idxmax()
+        longest_sentence = ' '.join(row.sentences_words[max_value_idx])
+        print('longest sentence: {0}'.format(longest_sentence))
+        print('---------------------------------------------------------------')
 
 def plot_words_per_sentence_histogram(articles_list):
     authors = iter(articles_list.author.unique())
     rows, cols = get_dims_of_subplots(articles_list.author.unique().__len__())
     fig, ax_lst = plt.subplots(nrows=rows, ncols=cols, sharex=True, sharey=True)
     for c in range(cols):
-            for r in range(rows):
-                axSubplt = ax_lst[r, c]
-                try:
-                    author = next(authors)
-                except StopIteration:
-                    break
-                author_articles = articles_list[articles_list.author == author]
-                words_each_sentence = [element for s in author_articles.number_of_words_each_sentence for element in s]
-                n, bins, patches = axSubplt.hist(words_each_sentence, 50, facecolor='green')
-                axSubplt.set_title(author)
-                axSubplt.grid(True)
+        for r in range(rows):
+            axSubplt = ax_lst[r, c]
+            try:
+                author = next(authors)
+            except StopIteration:
+                break
+            author_articles = articles_list[articles_list.author == author]
+            print('{0}: {1} articles'.format(author, author_articles.__len__()))
+            words_each_sentence = [element for s in author_articles.number_of_words_each_sentence for element in s]
+            n, bins, patches = axSubplt.hist(words_each_sentence, 50, facecolor='green')
+            axSubplt.set_title(author)
+            axSubplt.grid(True)
 
 def get_dims_of_subplots(num_of_authors):
     (frac, intpart) = np.modf(np.sqrt(num_of_authors))
@@ -116,6 +145,7 @@ if __name__ == '__main__':
         # run this to load a pandas data frame with the already pre-processed
         # articles. This is mainly to save time during development.
         articles_list = load_data_frame_from_disk()
+    get_articles_with_longest_sentences(articles_list, 50)
     plot_words_per_sentence_histogram(articles_list)
     plt.show()
 
