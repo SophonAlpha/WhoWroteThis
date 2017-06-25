@@ -114,16 +114,44 @@ def plot_words_per_sentence_histogram(articles_list):
     for c in range(cols):
         for r in range(rows):
             axSubplt = ax_lst[r, c]
+            axSubplt.set_axisbelow(True)
+            axSubplt.grid(True, color='grey', linestyle='dashed')
             try:
                 author = next(authors)
             except StopIteration:
                 break
+            axSubplt.set_title(author)
             author_articles = articles_list[articles_list.author == author]
             print('{0}: {1} articles'.format(author, author_articles.__len__()))
             words_each_sentence = [element for s in author_articles.number_of_words_each_sentence for element in s]
             n, bins, patches = axSubplt.hist(words_each_sentence, 50, facecolor='green')
-            axSubplt.set_title(author)
-            axSubplt.grid(True)
+    plt.show(block=False)
+
+def plot_feature_scatters(articles_list):
+    # scatter plots of the following features:
+    #    total_number_of_sentences
+    #    total_number_of_words
+    #    number_of_words_sentence_mean
+    #    number_of_words_sentence_median
+    #    number_of_words_sentence_min
+    #    number_of_words_sentence_max
+    author1 = 'Vivek Wadhwa'
+    author2 = 'Jill Schlesinger'
+    rows = 1
+    cols = 2
+    fig, ax_lst = plt.subplots(nrows=rows, ncols=cols)
+    # total_number_of_sentences vs. total_number_of_words
+    x1 = articles_list[articles_list.author == author1].total_number_of_sentences
+    y1 = articles_list[articles_list.author == author1].total_number_of_words
+    x2 = articles_list[articles_list.author == author2].total_number_of_sentences
+    y2 = articles_list[articles_list.author == author2].total_number_of_words
+    
+    axSubplt = ax_lst[0]
+    axSubplt.scatter(x1, y1, s=0.5, c='green')
+    axSubplt.scatter(x2, y2, s=0.5, c='blue')
+    axSubplt.set_xlabel('number of sentences')
+    axSubplt.set_ylabel('number of words')
+    plt.show(block=False)
 
 def get_dims_of_subplots(num_of_authors):
     (frac, intpart) = np.modf(np.sqrt(num_of_authors))
@@ -145,8 +173,9 @@ if __name__ == '__main__':
         # run this to load a pandas data frame with the already pre-processed
         # articles. This is mainly to save time during development.
         articles_list = load_data_frame_from_disk()
-    get_articles_with_longest_sentences(articles_list, 50)
+    get_articles_with_longest_sentences(articles_list, 25)
     plot_words_per_sentence_histogram(articles_list)
+    plot_feature_scatters(articles_list)
     plt.show()
 
 
