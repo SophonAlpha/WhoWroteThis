@@ -12,6 +12,7 @@ import string
 from nltk.tokenize import sent_tokenize
 from nltk.tokenize import word_tokenize
 import matplotlib.pyplot as plt
+from cycler import cycler
 
 ARTICLES_FILE = 'articles.json'
 
@@ -96,9 +97,9 @@ def save_data_frame_to_disk(articles_list):
 def load_data_frame_from_disk():
     return pd.read_pickle('articles.pickle', compression='gzip')
 
-def get_articles_with_longest_sentences(articles_list, num):
+def print_articles_with_longest_sentences(articles_list, num_articles):
     longest_sentence_articles = articles_list.sort_values('number_of_words_sentence_max',
-                                                          ascending = False).head(num)
+                                                          ascending = False).head(num_articles)
     for index, row in longest_sentence_articles.iterrows():
         print('author: {0}, url: {1}'.format(row.author, row.url))
         print('max sentence length: {0}'.format(int(row.number_of_words_sentence_max)))
@@ -110,10 +111,11 @@ def get_articles_with_longest_sentences(articles_list, num):
 def plot_words_per_sentence_histogram(articles_list):
     authors = iter(articles_list.author.unique())
     rows, cols = get_dims_of_subplots(articles_list.author.unique().__len__())
-    fig, ax_lst = plt.subplots(nrows=rows, ncols=cols, sharex=True, sharey=True)
+    fig, axes = plt.subplots(nrows=rows, ncols=cols, sharex=True, sharey=True)
+    
     for c in range(cols):
         for r in range(rows):
-            axSubplt = ax_lst[r, c]
+            axSubplt = axes[r, c]
             axSubplt.set_axisbelow(True)
             axSubplt.grid(True, color='grey', linestyle='dashed')
             try:
@@ -125,33 +127,77 @@ def plot_words_per_sentence_histogram(articles_list):
             print('{0}: {1} articles'.format(author, author_articles.__len__()))
             words_each_sentence = [element for s in author_articles.number_of_words_each_sentence for element in s]
             n, bins, patches = axSubplt.hist(words_each_sentence, 50, facecolor='green')
-    plt.show(block=False)
 
-def plot_feature_scatters(articles_list):
-    # scatter plots of the following features:
-    #    total_number_of_sentences
-    #    total_number_of_words
-    #    number_of_words_sentence_mean
-    #    number_of_words_sentence_median
-    #    number_of_words_sentence_min
-    #    number_of_words_sentence_max
-    author1 = 'Vivek Wadhwa'
-    author2 = 'Jill Schlesinger'
-    rows = 1
-    cols = 2
-    fig, ax_lst = plt.subplots(nrows=rows, ncols=cols)
-    # total_number_of_sentences vs. total_number_of_words
-    x1 = articles_list[articles_list.author == author1].total_number_of_sentences
-    y1 = articles_list[articles_list.author == author1].total_number_of_words
-    x2 = articles_list[articles_list.author == author2].total_number_of_sentences
-    y2 = articles_list[articles_list.author == author2].total_number_of_words
+    return fig
+
+def plot_feature_scatters(articles_list, authors):
+    plot_features = ['total_number_of_sentences',
+                     'total_number_of_words',
+                     'number_of_words_sentence_mean',
+                     'number_of_words_sentence_median',
+                     'number_of_words_sentence_min',
+                     'number_of_words_sentence_max']
+    plot_labels = ['total number\nof sentences',
+                   'total number\nof words',
+                   'words per\nsentence mean',
+                   'words per\nsentence median',
+                   'words per\nsentence min',
+                   'words per\nsentence max']
+    num_features = plot_features.__len__()
     
-    axSubplt = ax_lst[0]
-    axSubplt.scatter(x1, y1, s=0.5, c='green')
-    axSubplt.scatter(x2, y2, s=0.5, c='blue')
-    axSubplt.set_xlabel('number of sentences')
-    axSubplt.set_ylabel('number of words')
-    plt.show(block=False)
+    # set up the figure 
+    fig, axes = plt.subplots(nrows=num_features, ncols=num_features)
+    fig.subplots_adjust(hspace=0, wspace=0)
+    fig.suptitle("Feature Relationships", fontsize=14)
+    
+    # set up the axes
+    for ax in axes.flat:
+        ax.tick_params(axis='both',
+                       bottom='off', top='off', left='off', right='off',
+                       labelbottom='off', labeltop='off',
+                       labelleft='off', labelright='off')
+        if ax.is_first_col():
+            ax.yaxis.set_ticks_position('left')
+            ax.tick_params(axis='y', left='on', labelleft='on')
+        if ax.is_last_col():
+            ax.yaxis.set_ticks_position('right')
+            ax.tick_params(axis='y', right='on', labelright='on')
+        if ax.is_first_row():
+            ax.xaxis.set_ticks_position('top')
+            ax.tick_params(axis='x', top='on', labeltop='on')
+        if ax.is_last_row():
+            ax.xaxis.set_ticks_position('bottom')
+            ax.tick_params(axis='x', bottom='on', labelbottom='on')
+        # set colour cycler, each author a different colour 
+        ax.set_prop_cycle(cycler('color', ['blue', 'green', 'red', 'cyan',
+                                           'magenta', 'yellow', 'black', 'white']))
+        
+    # plot the scatter plots
+    for c in range(num_features):
+        for r in range(num_features):
+            if c == r:
+                # leave diagonal plots empty and remove ticks and labels
+                axes[r, c].xaxis.set_visible(False)
+                axes[r, c].yaxis.set_visible(False)
+            elif r > c:
+                axes[r, c].axis('off')
+            else:
+                axes[r, c].set_prop_cycle(None) # reset colour cycler
+                for author in authors:
+                    x = articles_list[articles_list.author == author][plot_features[c]]
+                    y = articles_list[articles_list.author == author][plot_features[r]]
+                    axes[r, c].scatter(x, y, s=2, alpha=0.5, label=author)
+
+    # place a legend above top left plot
+    axes[0, 1].legend(bbox_to_anchor=(-1, 1), loc=3)
+
+    # add axis labels in diagonal boxes
+    for i, label in enumerate(plot_labels):
+        axes[i,i].annotate(label, (0.5, 0.5), 
+                           xycoords='axes fraction', ha='center', va='center',
+                           size=8)
+    
+    return fig
 
 def get_dims_of_subplots(num_of_authors):
     (frac, intpart) = np.modf(np.sqrt(num_of_authors))
@@ -164,6 +210,7 @@ def get_dims_of_subplots(num_of_authors):
     return rows, cols
 
 if __name__ == '__main__':
+    # ---------- data load ----------
     if False:
         # run this to load articles from JSON file and pre-process the articles
         article_lines = read_articles_from_file(ARTICLES_FILE)
@@ -173,10 +220,53 @@ if __name__ == '__main__':
         # run this to load a pandas data frame with the already pre-processed
         # articles. This is mainly to save time during development.
         articles_list = load_data_frame_from_disk()
-    get_articles_with_longest_sentences(articles_list, 25)
-    plot_words_per_sentence_histogram(articles_list)
-    plot_feature_scatters(articles_list)
-    plt.show()
+        
+    # ---------- longest sentences ----------
+#     print_articles_with_longest_sentences(articles_list, 25)
+
+    # ---------- charts ----------
+#     figure1 = plot_words_per_sentence_histogram(articles_list)
+#     plt.show(block=False)
+#     figure2 = plot_feature_scatters(articles_list, ['Vivek Wadhwa', 'Jill Schlesinger', 'Betty Liu'])
+#     figure2 = plot_feature_scatters(articles_list, ['Brian de Haaff', 'Anurag Harsh'])
+#     plt.show()
+    
+    # ---------- predict author using machine learning ----------
+    # load data into separate pandas data frames
+    data = articles_list[['author',
+                          'total_number_of_sentences',
+                          'total_number_of_words',
+                          'number_of_words_sentence_mean',
+                          'number_of_words_sentence_median',
+                          'number_of_words_sentence_min',
+                          'number_of_words_sentence_max']]
+   
+    # get smallest number of articles from one author
+    authors = data.author.unique()
+    authors_num_articles = [[author, data[data.author == author].__len__()] for author in authors]
+    articles_sum = pd.DataFrame(authors_num_articles, columns=['author', 'num_of_articles'])
+    min_articles = articles_sum['num_of_articles'].min()
+    # shuffle data set
+    data = data.sample(frac=1)
+    # delete data sets so that each author has the same number as the author with
+    # smallest number of articles
+    for author in authors:
+        indexes_to_drop = data[data.author == author].index.tolist()[min_articles:]
+        data.drop(indexes_to_drop, inplace=True)
+        print('author: {0}, articles: {1}'.format(author, data[data.author == author].__len__()))
+    data = data.reset_index(drop=True)
+    # split labels into separate data frame
+    labels = data[['author']]
+    data = data.drop('author', 1)
+
+
+    # shuffle training test split
+    # train decision tree model with k-fold and cross validation
+    # plot R2 performance metric over size of training set 
+    # predict
+    # report precision & recall
+
+    
 
 
 
