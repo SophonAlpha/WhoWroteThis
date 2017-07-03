@@ -9,10 +9,22 @@ import json
 import pandas as pd
 import numpy as np
 import string
+import time
 from nltk.tokenize import sent_tokenize
 from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib import cm
+from matplotlib.ticker import LinearLocator, FormatStrFormatter
 from cycler import cycler
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import make_scorer
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import ShuffleSplit
+from sklearn.model_selection import GridSearchCV
+from sklearn import tree
+from collections import Counter
 
 ARTICLES_FILE = 'articles.json'
 
@@ -66,7 +78,8 @@ def get_article_metrics(article_lines):
             'number_of_words_sentence_median': [article_words.median(axis='index')],
             'number_of_words_sentence_min': [article_words.min(axis='index')],
             'number_of_words_sentence_max': [article_words.max(axis='index')]})
-        articles_list = articles_list.append(data, ignore_index = True)
+        if not data.isnull().values.any(): # skip articles with NaNs
+            articles_list = articles_list.append(data, ignore_index = True)
     return articles_list
 
 def split_paragraphs(text):
@@ -209,6 +222,62 @@ def get_dims_of_subplots(num_of_authors):
         cols = int(intpart + 1)
     return rows, cols
 
+def plot_3D_GridSearch_results(df):
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+
+    # transform data from dataframe
+    
+    startTime = time.time()
+    X, Y, Z = transform_dataframe(df)
+    elapsedTime = time.time() - startTime
+    print('transform data via loops: {0}s'.format(elapsedTime))
+    startTime = time.time()
+    X, Y, Z = transform_dataframe_pivot(df)
+    elapsedTime = time.time() - startTime
+    print('transform data via df.pivot: {0}s'.format(elapsedTime))
+    # results from the timing above:
+    #     transform data via loops: 4.733000040054321s
+    #     transform data via df.pivot: 0.005000114440917969s
+    # Holy Sun!!!  Using pandas functions is 946.59 times faster!
+    
+    # Plot the surface.
+    surf = ax.plot_surface(X, Y, Z, cmap=cm.coolwarm,  # @UndefinedVariable
+                           linewidth=0, antialiased=False)
+    
+    # customise the z axis.
+    ax.set_zlim(0, 1.01)
+    ax.zaxis.set_major_locator(LinearLocator(10))
+    ax.zaxis.set_major_formatter(FormatStrFormatter('%.02f'))
+    
+    # Add a color bar which maps values to colors.
+    fig.colorbar(surf, shrink=0.5, aspect=5)
+    
+    plt.show()
+
+def transform_dataframe(df):
+    x_param = 'param_max_depth'
+    y_param = 'param_min_samples_split'
+    z_param = 'mean_test_score'
+    X = df[x_param].drop_duplicates()
+    Y = df[y_param].drop_duplicates()
+    Z = pd.DataFrame(np.zeros((Y.__len__(), X.__len__())))
+    for i_x, x in enumerate(X):
+        for i_y, y in enumerate(Y):
+            value = df[df[x_param] == x][df[y_param] == y][z_param].iloc[0]
+            Z.iloc[i_y, i_x] = value
+    X, Y = np.meshgrid(X, Y)
+    return X, Y, Z
+
+def transform_dataframe_pivot(df):
+    Z = df.pivot(index='param_min_samples_split',
+                 columns='param_max_depth',
+                 values='mean_test_score')
+    X = Z.columns
+    Y = Z.index
+    X, Y = np.meshgrid(X, Y)
+    return X, Y, Z
+
 if __name__ == '__main__':
     # ---------- data load ----------
     if False:
@@ -220,19 +289,20 @@ if __name__ == '__main__':
         # run this to load a pandas data frame with the already pre-processed
         # articles. This is mainly to save time during development.
         articles_list = load_data_frame_from_disk()
-        
-    # ---------- longest sentences ----------
-#     print_articles_with_longest_sentences(articles_list, 25)
 
-    # ---------- charts ----------
-#     figure1 = plot_words_per_sentence_histogram(articles_list)
-#     plt.show(block=False)
-#     figure2 = plot_feature_scatters(articles_list, ['Vivek Wadhwa', 'Jill Schlesinger', 'Betty Liu'])
-#     figure2 = plot_feature_scatters(articles_list, ['Brian de Haaff', 'Anurag Harsh'])
-#     plt.show()
+    if False:
+        # ---------- longest sentences ----------
+        print_articles_with_longest_sentences(articles_list, 25)
+    
+        # ---------- charts ----------
+        figure1 = plot_words_per_sentence_histogram(articles_list)
+        plt.show(block=False)
+        figure2 = plot_feature_scatters(articles_list, ['Vivek Wadhwa', 'Jill Schlesinger', 'Betty Liu'])
+        figure2 = plot_feature_scatters(articles_list, ['Brian de Haaff', 'Anurag Harsh'])
+        plt.show()
     
     # ---------- predict author using machine learning ----------
-    # load data into separate pandas data frames
+    # load data into separate pandas data frame
     data = articles_list[['author',
                           'total_number_of_sentences',
                           'total_number_of_words',
@@ -240,7 +310,6 @@ if __name__ == '__main__':
                           'number_of_words_sentence_median',
                           'number_of_words_sentence_min',
                           'number_of_words_sentence_max']]
-   
     # get smallest number of articles from one author
     authors = data.author.unique()
     authors_num_articles = [[author, data[data.author == author].__len__()] for author in authors]
@@ -258,17 +327,48 @@ if __name__ == '__main__':
     # split labels into separate data frame
     labels = data[['author']]
     data = data.drop('author', 1)
-
-
     # shuffle training test split
+    X_train, X_test, y_train, y_test = train_test_split(data, labels, test_size=0.25, random_state=23)
+    # decision tree prediction model
+    clf = tree.DecisionTreeClassifier()
+    clf = clf.fit(X_train, y_train)
+    score_train = accuracy_score(y_train, clf.predict(X_train))
+    score_test = accuracy_score(y_test, clf.predict(X_test))
+    print('prediction accuracy score on training data set: {0}'.format(score_train))
+    print('prediction accuracy score on test data set: {0}'.format(score_test))
+    # decision tree prediction model with GridSearch
+    if False:
+        cv_sets = ShuffleSplit(n_splits=10, test_size = 0.25, random_state = 23)
+        learning_model = tree.DecisionTreeClassifier()
+        params = {'max_depth': list(range(1,30)),
+                  'min_samples_split': list(range(2,50))}
+        scoring_fnc = make_scorer(accuracy_score, greater_is_better=True)
+        grid = GridSearchCV(estimator=learning_model, param_grid=params, scoring=scoring_fnc, cv=cv_sets)
+        grid = grid.fit(data, labels)
+        best_clf = grid.best_estimator_
+        score_test = accuracy_score(y_test, best_clf.predict(X_test))
+        print('GridSearch prediction accuracy score on test data set: {0}'.format(score_test))
+        print('best parameters:')
+        print('    max_depth:{0}'.format(best_clf.get_params()['max_depth']))
+        print('    min_samples_split:{0}'.format(best_clf.get_params()['min_samples_split']))
+        cv_results_df = pd.DataFrame(grid.cv_results_)
+        cv_results_df.to_pickle('cv_results_df.pickle', compression='gzip')
+    cv_results_df = pd.read_pickle('cv_results_df.pickle', compression='gzip')
+    plot_3D_GridSearch_results(cv_results_df[['param_max_depth', 'param_min_samples_split', 'mean_test_score']])
+    # counting terms
+    article_words = articles_list[articles_list.author == 'Jill Schlesinger'].iloc[0].sentences_words
+    article_words = [w for s in article_words for w in s] # "unpack" list of words from list of sentences
+    print(Counter(article_words).most_common(5))
+    # exclude stop words
+    stop = stopwords.words('english')
+    article_words = [w for w in article_words if w not in stop]
+    print(Counter(article_words).most_common(5))
+
+
+
+
+
     # train decision tree model with k-fold and cross validation
-    # plot R2 performance metric over size of training set 
+    # plot R2 performance metric over size of training set
     # predict
     # report precision & recall
-
-    
-
-
-
-
-

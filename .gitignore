@@ -10,3 +10,6 @@ debug.log
 /articles.pickle
 /articles.json
 articles.json
+/cv_results.json
+/cv_results_df.pickle
+/surface3d_demo.py
