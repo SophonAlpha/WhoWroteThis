@@ -10,11 +10,13 @@ import pandas as pd
 import numpy as np
 import string
 import time
+import nltk
 from nltk.tokenize import sent_tokenize
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
+from nltk import bigrams
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d import Axes3D  # @UnusedImport
 from matplotlib import cm
 from matplotlib.ticker import LinearLocator, FormatStrFormatter
 from cycler import cycler
@@ -23,6 +25,8 @@ from sklearn.metrics import make_scorer
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import ShuffleSplit
 from sklearn.model_selection import GridSearchCV
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn import tree
 from collections import Counter
 
@@ -31,7 +35,7 @@ ARTICLES_FILE = 'articles.json'
 # TODO: "bags of words"
 # TODO: word bigrams
 
-def cleanup_text(text):
+def cleanup_text(text_corpus):
     replacement_specification = [
         # fix sentence that end before quotation mark, 'sent_tokenize' doesn't recognise these
         (r'.”', '.”.'),
@@ -47,8 +51,8 @@ def cleanup_text(text):
         (r'Image by Flickr User(.*\s*)*', ''),
         (r'Dustin McKissen is the founder(.*\s*)*', '')]
     for pattern in replacement_specification:
-        text = re.sub(pattern[0], pattern[1], text)
-    return text
+        text_corpus = re.sub(pattern[0], pattern[1], text_corpus)
+    return text_corpus
 
 def read_articles_from_file(file_name):
     with open(file_name, 'r') as f:
@@ -67,7 +71,7 @@ def get_article_metrics(article_lines):
         article_words, sentences_words = tokenize_words(sentences)
         data = pd.DataFrame(data = {
             'author': [article_json['author']],
-            'body': [article_json['body']], # raw text of the article 
+            'body': [article_json['body']], # raw text_corpus of the article 
             'sentences_words': [sentences_words], # list of words nested in list of sentences
             'headline': [article_json['headline']],
             'url': [article_json['url']],
@@ -82,8 +86,8 @@ def get_article_metrics(article_lines):
             articles_list = articles_list.append(data, ignore_index = True)
     return articles_list
 
-def split_paragraphs(text):
-    paragraphs = [p for p in text.split('\n')]
+def split_paragraphs(text_corpus):
+    paragraphs = [p for p in text_corpus.split('\n')]
     return paragraphs
 
 def tokenize_sentences(paragraphs):
@@ -278,6 +282,9 @@ def transform_dataframe_pivot(df):
     X, Y = np.meshgrid(X, Y)
     return X, Y, Z
 
+def my_tokenizer(s):
+    return s
+
 if __name__ == '__main__':
     # ---------- data load ----------
     if False:
@@ -310,7 +317,7 @@ if __name__ == '__main__':
                           'number_of_words_sentence_median',
                           'number_of_words_sentence_min',
                           'number_of_words_sentence_max']]
-    # get smallest number of articles from one author
+    # get the author with the smallest number of articles
     authors = data.author.unique()
     authors_num_articles = [[author, data[data.author == author].__len__()] for author in authors]
     articles_sum = pd.DataFrame(authors_num_articles, columns=['author', 'num_of_articles'])
@@ -358,12 +365,25 @@ if __name__ == '__main__':
     # counting terms
     article_words = articles_list[articles_list.author == 'Jill Schlesinger'].iloc[0].sentences_words
     article_words = [w for s in article_words for w in s] # "unpack" list of words from list of sentences
-    print(Counter(article_words).most_common(5))
+    print(Counter(article_words).most_common(10))
     # exclude stop words
     stop = stopwords.words('english')
     article_words = [w for w in article_words if w not in stop]
-    print(Counter(article_words).most_common(5))
-
+    print('top word frequencies:\n {0}'.format(Counter(article_words).most_common(10)))
+    # count bigrams
+    terms_bigram = bigrams(article_words)
+    fdist = nltk.FreqDist(terms_bigram)
+    print('top bigram frequencies:\n{0}'.format(fdist.most_common(10)))
+    
+    vectorizer = CountVectorizer(min_df=1, ngram_range=(2, 2))
+#     text_corpus = [[' '.join(sentence)] for article in articles_list.sentences_words for sentence in article]
+    text_corpus = [' '.join([' '.join(sentence) for sentence in article]) for article in articles_list.sentences_words]
+#     text_corpus = ' '.join(article_words)
+    X = vectorizer.fit_transform(text_corpus)
+    print(vectorizer.get_feature_names().__len__())
+    transformer = TfidfTransformer(smooth_idf=False)
+    tfidf = transformer.fit_transform(X.toarray())
+    
 
 
 
