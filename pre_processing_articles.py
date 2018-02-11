@@ -29,6 +29,7 @@ from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn import tree
 from collections import Counter
+from sklearn.naive_bayes import GaussianNB
 
 ARTICLES_FILE = 'articles.json'
 
@@ -347,11 +348,14 @@ if __name__ == '__main__':
     if False:
         cv_sets = ShuffleSplit(n_splits=10, test_size = 0.25, random_state = 23)
         learning_model = tree.DecisionTreeClassifier()
-        params = {'max_depth': list(range(1,30)),
+        params = {'max_depth': list(range(1,30)),   
                   'min_samples_split': list(range(2,50))}
         scoring_fnc = make_scorer(accuracy_score, greater_is_better=True)
-        grid = GridSearchCV(estimator=learning_model, param_grid=params, scoring=scoring_fnc, cv=cv_sets)
-        grid = grid.fit(data, labels)
+        grid = GridSearchCV(estimator=learning_model,
+                            param_grid=params,
+                            scoring=scoring_fnc,
+                            cv=cv_sets)
+        grid = grid.fit(X_train, y_train)
         best_clf = grid.best_estimator_
         score_test = accuracy_score(y_test, best_clf.predict(X_test))
         print('GridSearch prediction accuracy score on test data set: {0}'.format(score_test))
@@ -374,17 +378,57 @@ if __name__ == '__main__':
     terms_bigram = bigrams(article_words)
     fdist = nltk.FreqDist(terms_bigram)
     print('top bigram frequencies:\n{0}'.format(fdist.most_common(10)))
-    
-    vectorizer = CountVectorizer(min_df=1, ngram_range=(2, 2))
-#     text_corpus = [[' '.join(sentence)] for article in articles_list.sentences_words for sentence in article]
-    text_corpus = [' '.join([' '.join(sentence) for sentence in article]) for article in articles_list.sentences_words]
-#     text_corpus = ' '.join(article_words)
+
+    text_corpus = [' '.join([' '.join(sentence) \
+                    for sentence in article]) \
+                        for article in articles_list.sentences_words]
+    labels = articles_list.author
+    vectorizer = CountVectorizer(ngram_range=(1, 1), stop_words='english')
     X = vectorizer.fit_transform(text_corpus)
-    print(vectorizer.get_feature_names().__len__())
+    print('no. of features with stop_words: {0}'.format(vectorizer.get_feature_names().__len__()))
+    word_freq_df = pd.DataFrame({'term': vectorizer.get_feature_names(), 'occurrences':np.asarray(X.sum(axis=0)).ravel().tolist()})
     transformer = TfidfTransformer(smooth_idf=False)
     tfidf = transformer.fit_transform(X.toarray())
-    
+    # split training and test data
+    X_train, X_test, y_train, y_test = train_test_split(tfidf, labels, test_size=0.25, random_state=23)
 
+    # Gaussian Naive Bayes classifier
+    clf = GaussianNB()
+    clf = clf.fit(X_train.toarray(), y_train)
+    score_train = accuracy_score(y_train, clf.predict(X_train.toarray()))
+    score_test = accuracy_score(y_test, clf.predict(X_test.toarray()))
+    print('Gaussian Naive Bayes training accuracy: {0}'.format(score_train))
+    print('Gaussian Naive Bayes test accuracy: {0}'.format(score_test))
+
+    # Decision Tree classifier
+    clf = tree.DecisionTreeClassifier()
+    clf = clf.fit(X_train.toarray(), y_train)
+    score_train1 = accuracy_score(y_train, clf.predict(X_train.toarray()))
+    score_test1 = accuracy_score(y_test, clf.predict(X_test.toarray()))
+    print('Decision Tree training accuracy: {0}'.format(score_train1))
+    print('Decision Tree test accuracy: {0}'.format(score_test1))
+
+    # Decision Tree classifier optimisation with GridSearch
+    cv_sets = ShuffleSplit(n_splits=10, test_size = 0.25, random_state = 23)
+    learning_model = tree.DecisionTreeClassifier()
+    params = {'max_depth': list(range(1,30)),
+              'min_samples_split': list(range(2,50))}
+    scoring_fnc = make_scorer(accuracy_score, greater_is_better=True)
+    grid = GridSearchCV(estimator=learning_model, 
+                        param_grid=params, 
+                        scoring=scoring_fnc, 
+                        cv=cv_sets,
+                        n_jobs=8,
+                        verbose=5)
+#     grid = grid.fit(X_train, y_train)
+#     best_clf = grid.best_estimator_
+#     score_test = accuracy_score(y_test, best_clf.predict(X_test))
+#     cv_results_df = pd.DataFrame(grid.cv_results_)
+#     cv_results_df.to_pickle('text_frequency_cv_results_df.pickle', compression='gzip')
+#     print('GridSearch prediction accuracy score on test data set: {0}'.format(score_test))
+#     print('best parameters:')
+#     print('    max_depth:{0}'.format(best_clf.get_params()['max_depth']))
+#     print('    min_samples_split:{0}'.format(best_clf.get_params()['min_samples_split']))
 
 
 
