@@ -166,7 +166,9 @@ class MediumArticleCollector:
         self.wait_timeout = 60
         self.scroll_down_wait = 1
         self.browserType = browserType
-        self.saved_article_URLs = []
+        self.author_URLs = []
+        self.article_URLs = []
+        self.articles = []
 
     # --------------- methods to collect article URLs --------------------------
 
@@ -180,38 +182,43 @@ class MediumArticleCollector:
         self.browser.get('http://www.medium.com/')
 
     def login(self):
-        """
+        '''
         Medium.com login is not automated. The login needs to be performed by 
         the user. Medium offers multiple options for login. The user needs to 
         make sure he logs in the same tab that was opened by this script.
         Not ideal. Maybe I build an automated solution later.
-        """
+        '''
         input('Please login to medium.com and press Enter to continue.')
         self.wait_for_element('//img[@class="avatar-image avatar-image--icon"]')
 
+    def wait_for_element(self, element_xpath):
+        element = WebDriverWait(self.browser, self.wait_timeout).until(
+            EC.presence_of_element_located((By.XPATH, element_xpath)))
+        return element
+
     def save_article_URLs(self):
-        self.saved_article_URLs = self.load_saved_article_URLs()
-        author_URLs = self.load_authors()
-#        author_URLs = self.remove_authors_already_covered(author_URLs)
-        self.write_article_URLs_to_file(author_URLs)
+        self.article_URLs = self.load_saved_article_URLs()
+        self.load_authors()
+#        self.author_URLs = self.remove_authors_already_covered(self.author_URLs)
+        self.write_article_URLs_to_file()
 
     def load_saved_article_URLs(self):
         if Path(ARTICLE_URLS_FILE).exists():
             with open(ARTICLE_URLS_FILE, 'r') as f:
-                article_addresses = json.load(f)
+                article_URLs = json.load(f)
         else:
-            article_addresses = []
-        return article_addresses
+            article_URLs = []
+        return article_URLs
 
     def load_authors(self):
         with open(AUTHORS_FILE, 'r') as f:
-            authors = f.readlines()
-        return authors
+            self.author_URLs = f.readlines()
+        return
 
     def remove_authors_already_covered(self, author_urls):
         reduced_list = []
         author_urls_already_covered = list(set([article_url['author_URL'] 
-                                                for article_url in self.saved_article_URLs]))
+                                                for article_url in self.article_URLs]))
         for author_url in author_urls:
             if author_url in author_urls_already_covered:
                 pass
@@ -219,22 +226,22 @@ class MediumArticleCollector:
                 reduced_list.append(author_url)
         return reduced_list
 
-    def write_article_URLs_to_file(self, author_URLs):
-        for author_URL in author_URLs:
+    def write_article_URLs_to_file(self):
+        for author_URL in self.author_URLs:
             article_URLs = self.get_author_article_URLs(author_URL)
             print('author: {}, articles: {}'.format(author_URL.rstrip(), len(article_URLs)))
             for article_URL in article_URLs:
                 if not(self.article_URL_in_list(article_URL)):
-                    self.saved_article_URLs.append({'author_URL': author_URL,
+                    self.article_URLs.append({'author_URL': author_URL,
                                                     'article_URL': article_URL})
             with open(ARTICLE_URLS_FILE, 'w') as f:
-                json.dump(self.saved_article_URLs, f)
-            with open('saved_Medium_authors.csv', 'w') as f:
-                f.write('{};{}'.format(author_URL.rstrip(), len(article_URLs)))
+                json.dump(self.article_URLs, f)
+            with open('saved_Medium_authors.csv', 'a+') as f:
+                f.write('{};{}\n'.format(author_URL.rstrip(), len(article_URLs)))
 
     def article_URL_in_list(self, article_URL):
         found = False
-        for a in self.saved_article_URLs:
+        for a in self.article_URLs:
             if a['article_URL'] == article_URL:
                 found = True
                 break
@@ -271,11 +278,11 @@ class MediumArticleCollector:
         return
     
     def reached_end_of_page(self, height_before_scroll):
-        """
+        '''
         Do an escalating wait to ensure page has been updated after the scroll
         down command and we really have reached the end of the page. Wait time
         is escalated to avoid unnecessary long wait time with faster page loads.
-        """
+        '''
         max_wait_cycles = 5
         reached_end_of_page = False
         for factor in range(1, max_wait_cycles+1):
@@ -300,18 +307,24 @@ class MediumArticleCollector:
 
     # --------------- methods to download the articles -------------------------
 
-    def get_articles(self, author_URL):
-        # TODO: this method needs to be modified to read the the article URLs
-        # from the file that has been created already.
-        ''' 
-        Download all articles for a particular author. The author's Medium
-        URL needs to be given as argument.
-        Return list of articles.
+    def save_articles(self):
+        '''
+        Download all articles.Return list of articles.
+        '''
+        self.article_URLs = self.load_saved_article_URLs()
+        self.articles = self.get_articles(self.article_URLs)
+
+    def get_articles(self, article_URLs):
+        '''
+        Get all articles.
         '''
         articles = []
-        article_URLs = self.get_author_article_URLs(author_URL)
-        for link in article_URLs:
-            articles.append(self.get_article(link))
+        for entry in article_URLs:
+            author_URL = entry['author_URL']
+            article_URL =  entry['article_URL']
+            article = self.get_article(article_URL)
+            articles.append(article)
+            self.save_articles_to_file(articles)
         return articles
     
     def get_article(self, article_url):
@@ -319,16 +332,19 @@ class MediumArticleCollector:
         Download one article.
         '''
         self.browser.get(article_url)
+        author = self.browser.find_element_by_xpath('//a[@rel="author cc:attributionUrl"]').text
+        headline = self.browser.find_element_by_xpath('//h1[@class="graf graf--h3 graf--leading graf--title"]').text
+        body = self.browser.find_element_by_xpath('//div[@class="section-inner sectionLayout--insetColumn"]').text
+        body = body.replace(headline, '')
         article = {'url': article_url,
-                   'author': self.browser.find_element_by_xpath('//span[@itemprop="name"]').text,
-                   'headline': self.browser.find_element_by_xpath('//h1[@itemprop="headline"]').text,
-                   'body': self.browser.find_element_by_xpath('//div[@itemprop="articleBody"]').text}
+                   'author': author,
+                   'headline': headline,
+                   'body': body}
         return article
 
-    def wait_for_element(self, element_xpath):
-        element = WebDriverWait(self.browser, self.wait_timeout).until(
-            EC.presence_of_element_located((By.XPATH, element_xpath)))
-        return element
+    def save_articles_to_file(self, articles):
+        with open(ARTICLES_FILE, 'w') as f:
+            json.dump(articles, f)
 
     def close(self):
         self.browser.quit()
@@ -338,17 +354,18 @@ class MediumArticleCollector:
 if __name__ == "__main__":
     startTime = time.time()
     print('Start')
+    Medium = MediumArticleCollector()
+    Medium.start_webdriver()
+    Medium.login()        
     if True:
         # Run this part to build the list of article URLs.
-        Medium = MediumArticleCollector()
-        Medium.start_webdriver()
-        Medium.login()        
         Medium.save_article_URLs()
-        Medium.close()
     if False:
         # Run this part when downloading the articles. This requires the list
         # of article URLs to be build beforehand.
-        d = Dispatcher(num_of_workers=3)
-        d.run()
+        Medium.save_articles()
+#        d = Dispatcher(num_of_workers=3)
+#        d.run()
+    Medium.close()
     elapsedTime = time.time() - startTime
     print('Done! Runtime: {0} hours.'.format(elapsedTime/3600))
