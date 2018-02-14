@@ -13,3 +13,5 @@ articles.json
 /cv_results.json
 /cv_results_df.pickle
 /surface3d_demo.py
+Medium_articles/
+/saved_Medium_authors.csv

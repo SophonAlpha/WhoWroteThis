@@ -14,37 +14,43 @@ from threading import Thread
 from threading import Event
 import time
 import json
+import os
 from pathlib import Path
+from unidecode import unidecode
+import re
 
 # AUTHORS_FILE = 'list_of_authors_short.txt'
-AUTHORS_FILE = 'list_of_top_Medium_authors.txt'
+AUTHORS_FILE = 'Medium_authors_25.txt'
 ARTICLE_URLS_FILE = 'Medium_article_urls.json'
-ARTICLES_FILE = 'Medium_articles.json'
+ARTICLES_FOLDER = 'Medium_articles'
 
 # ------------------- Parallel Processing --------------------------------------
 
 class Dispatcher:
     
-    def __init__(self, num_of_workers=3):
-        self.num_of_workers = num_of_workers
-        self.Qs = {'jobQ': queue.Queue(), 'resultQ':queue.Queue()}
-        self.setup_collator()
-        self.setup_workers()
-        self.start_collator()
-        self.start_workers()
+    def __init__(self,
+                 num_of_workers=3,
+                 get_next_job=None,
+                 collator_task=None,
+                 worker_setup=None,
+                 worker_task=None):
+        self.get_next_job = get_next_job
+        Qs = {'jobQ': queue.Queue(), 'resultQ':queue.Queue()}
+        self.setup_collator(Qs, collator_task)
+        self.setup_workers(num_of_workers, Qs, worker_setup, worker_task)
+#        self.start_collator()
+#        self.start_workers()
         pass
     
     def run(self):
-        with open(ARTICLE_URLS_FILE, 'r') as f:
-            articles_urls = json.load(f)
-        for article_url in articles_urls:
-            self.Qs['jobQ'].put(article_url['article_url'])
+        for job in self.get_next_job():
+            self.Qs['jobQ'].put(job)
         self.wait_till_queues_empty(self.Qs)
         self.stop_workers()
         self.stop_collator()
 
-    def setup_collator(self):
-        self.collator = Collator(self.Qs)
+    def setup_collator(self, Qs, collator_task):
+        self.collator = Collator(Qs, collator_task)
 
     def start_collator(self):
         self.collator.start()
@@ -53,10 +59,10 @@ class Dispatcher:
         self.collator.stop()
         self.collator.join()
     
-    def setup_workers(self):
+    def setup_workers(self, num_of_workers, Qs, worker_task):
         self.worker_pool = []
-        for _ in range(self.num_of_workers):
-            worker = Worker(self.Qs)
+        for _ in range(num_of_workers):
+            worker = Worker(Qs, worker_task)
             self.worker_pool.append(worker)
 
     def start_workers(self):
@@ -74,11 +80,12 @@ class Dispatcher:
 
 class Collator(Thread):
     
-    def __init__(self, Qs):
+    def __init__(self, Qs, collator_task):
         Thread.__init__(self)
         self.stop_signal = Event()
         self.Qs = Qs
-        print('%s collator initialised' %self.getName())
+        self.collator_task = collator_task
+        print('{} collator initialised'.format(self.getName()))
     
     def setup(self):
         # any setup tasks
@@ -93,10 +100,7 @@ class Collator(Thread):
                     self.shutdown()
                     break
             else:
-                print('received article "{0}" from {1}'.format(result['headline'], result['author']))
-                with open(ARTICLES_FILE, 'a') as f:
-                    out = json.dumps(result)
-                    f.write(out + '\n')
+                self.collator_task(result)
                 self.Qs['resultQ'].task_done()
             
     def stop(self):
@@ -111,21 +115,13 @@ class Collator(Thread):
 
 class Worker(Thread):
 
-    def __init__(self, Qs):
+    def __init__(self, Qs, worker_setup, worker_task):
         Thread.__init__(self)
         self.stop_signal = Event()
         self.LinkedIn = MediumArticleCollector()
         self.Qs = Qs
-        self.existing_articles = self.load_existing_articles(ARTICLES_FILE)
-        print('%s worker initialised' %self.getName())
-
-    def load_existing_articles(self, articles_file):
-        existing_articles = []
-        with open(articles_file, 'r') as f:
-            ea = f.readlines()
-        for article in ea:
-            existing_articles.append(json.loads(article)['url'])
-        return existing_articles
+        self.worker_task = worker_task
+        worker_setup()
 
     def setup(self):
         # any setup tasks
@@ -188,7 +184,7 @@ class MediumArticleCollector:
         make sure he logs in the same tab that was opened by this script.
         Not ideal. Maybe I build an automated solution later.
         '''
-        input('Please login to medium.com and press Enter to continue.')
+        print('Please login to medium.com and press Enter to continue.')
         self.wait_for_element('//img[@class="avatar-image avatar-image--icon"]')
 
     def wait_for_element(self, element_xpath):
@@ -196,9 +192,27 @@ class MediumArticleCollector:
             EC.presence_of_element_located((By.XPATH, element_xpath)))
         return element
 
+    def save_article_URLs_multithreaded(self):
+        d = Dispatcher(num_of_workers=1,
+                       get_next_job=self.get_next_author_URL,
+                       collator_task=self.write_article_URL_to_file,
+                       worker_setup=self.start_webdriver(),
+                       worker_task=None)
+        d.run()
+
+    def get_next_author_URL(self):
+        f = open(AUTHORS_FILE, 'r')
+        while True:
+            author_URL = f.readline()
+            yield author_URL
+            if not(author_URL):
+                break
+        f.close()
+
     def save_article_URLs(self):
+        self.start_webdriver()
+        self.login()
         self.article_URLs = self.load_saved_article_URLs()
-        self.load_authors()
 #        self.author_URLs = self.remove_authors_already_covered(self.author_URLs)
         self.write_article_URLs_to_file()
 
@@ -210,10 +224,10 @@ class MediumArticleCollector:
             article_URLs = []
         return article_URLs
 
-    def load_authors(self):
-        with open(AUTHORS_FILE, 'r') as f:
-            self.author_URLs = f.readlines()
-        return
+#    def load_authors(self):
+#        with open(AUTHORS_FILE, 'r') as f:
+#            author_URLs = f.readlines()
+#        return author_URLs
 
     def remove_authors_already_covered(self, author_urls):
         reduced_list = []
@@ -227,17 +241,20 @@ class MediumArticleCollector:
         return reduced_list
 
     def write_article_URLs_to_file(self):
-        for author_URL in self.author_URLs:
-            article_URLs = self.get_author_article_URLs(author_URL)
-            print('author: {}, articles: {}'.format(author_URL.rstrip(), len(article_URLs)))
-            for article_URL in article_URLs:
-                if not(self.article_URL_in_list(article_URL)):
-                    self.article_URLs.append({'author_URL': author_URL,
-                                                    'article_URL': article_URL})
-            with open(ARTICLE_URLS_FILE, 'w') as f:
-                json.dump(self.article_URLs, f)
-            with open('saved_Medium_authors.csv', 'a+') as f:
-                f.write('{};{}\n'.format(author_URL.rstrip(), len(article_URLs)))
+        for author_URL in self.get_next_author_URL():
+            self.write_article_URL_to_file(author_URL)
+
+    def write_article_URL_to_file(self, author_URL):
+        article_URLs = self.get_author_article_URLs(author_URL)
+        print('author: {}, articles: {}'.format(author_URL.rstrip(), len(article_URLs)))
+        for article_URL in article_URLs:
+            if not(self.article_URL_in_list(article_URL)):
+                self.article_URLs.append({'author_URL': author_URL,
+                                          'article_URL': article_URL})
+        with open(ARTICLE_URLS_FILE, 'w') as f:
+            json.dump(self.article_URLs, f)
+        with open('saved_Medium_authors.csv', 'a+') as f:
+            f.write('{};{}\n'.format(author_URL.rstrip(), len(article_URLs)))
 
     def article_URL_in_list(self, article_URL):
         found = False
@@ -311,40 +328,74 @@ class MediumArticleCollector:
         '''
         Download all articles.Return list of articles.
         '''
-        self.article_URLs = self.load_saved_article_URLs()
-        self.articles = self.get_articles(self.article_URLs)
-
-    def get_articles(self, article_URLs):
-        '''
-        Get all articles.
-        '''
-        articles = []
+        article_URLs = self.load_saved_article_URLs()
+        article_URLs = self.remove_articles_already_saved(article_URLs)
         for entry in article_URLs:
-            author_URL = entry['author_URL']
-            article_URL =  entry['article_URL']
-            article = self.get_article(article_URL)
-            articles.append(article)
-            self.save_articles_to_file(articles)
-        return articles
-    
+            article = self.get_article(entry['article_URL'])
+            self.save_article_to_file(article)
+            print('{} | {} | {} bytes | {}'.format(article['author'],
+                                             article['headline'],
+                                             len(article['body']),
+                                             article['url']))
+
+    def remove_articles_already_saved(self, article_URLs):
+        saved_article_URLs = self.get_saved_article_URLs()
+        reduced_list = self.remove_done_URLs(article_URLs, saved_article_URLs)
+        return reduced_list
+
+    def get_saved_article_URLs(self):
+        saved_article_URLs = []
+        for root, _, files in os.walk(ARTICLES_FOLDER):
+            for file in files:
+                article_file = os.path.join(root, file)
+                with open(article_file, 'r') as f:
+                    article = json.load(f)
+                    saved_article_URLs.append(article['url'])
+        return saved_article_URLs
+
+    def remove_done_URLs(self, article_URLs, saved_article_URLs):
+        reduced_list = []
+        for article_URL in article_URLs:
+            if not(article_URL['article_URL'] in saved_article_URLs):
+                reduced_list.append(article_URL)
+        return reduced_list
+
     def get_article(self, article_url):
         '''
         Download one article.
         '''
         self.browser.get(article_url)
         author = self.browser.find_element_by_xpath('//a[@rel="author cc:attributionUrl"]').text
-        headline = self.browser.find_element_by_xpath('//h1[@class="graf graf--h3 graf--leading graf--title"]').text
-        body = self.browser.find_element_by_xpath('//div[@class="section-inner sectionLayout--insetColumn"]').text
-        body = body.replace(headline, '')
+        headline = self.get_headline()
+        body = self.browser.find_element_by_xpath('//div[@class="postArticle-content js-postField js-notesSource js-trackedPost"]').text
         article = {'url': article_url,
                    'author': author,
                    'headline': headline,
                    'body': body}
         return article
+    
+    def get_headline(self):
+        headline =''
+        for i in range(1,5):
+            headline = self.browser.find_elements_by_tag_name('h{}'.format(i))
+            if len(headline) > 0:
+                headline = headline[0].text
+                break
+        return headline
 
-    def save_articles_to_file(self, articles):
-        with open(ARTICLES_FILE, 'w') as f:
-            json.dump(articles, f)
+    def save_article_to_file(self, article):
+        folders = self.to_file_string(os.path.join(ARTICLES_FOLDER, article['author']))
+        file = self.to_file_string(os.path.join(folders, unidecode(article['headline'])+'.json'))
+        if not(os.path.exists(folders)):
+            os.makedirs(folders)
+        with open(file, 'w') as f:
+            json.dump(article, f)
+            
+    def to_file_string(self, string):
+        non_file_chars = '''[~#%&*{}\\:<>?/+|\"']'''
+        string = re.sub(non_file_chars, '', string)
+        string = re.sub('[\s]', '_', string)
+        return string
 
     def close(self):
         self.browser.quit()
@@ -352,20 +403,20 @@ class MediumArticleCollector:
 # ------------------- Main -----------------------------------------------------
 
 if __name__ == "__main__":
-    startTime = time.time()
     print('Start')
     Medium = MediumArticleCollector()
-    Medium.start_webdriver()
-    Medium.login()        
     if True:
         # Run this part to build the list of article URLs.
-        Medium.save_article_URLs()
-    if False:
+        startTime = time.time()
+#        Medium.save_article_URLs()
+        Medium.save_article_URLs_multithreaded()
+        elapsedTime = time.time() - startTime
+        print('Article URLs collected in {0} hours.'.format(elapsedTime/3600))
+    if True:
         # Run this part when downloading the articles. This requires the list
         # of article URLs to be build beforehand.
+        startTime = time.time()
         Medium.save_articles()
-#        d = Dispatcher(num_of_workers=3)
-#        d.run()
+        elapsedTime = time.time() - startTime
+        print('Articles downloaded in {0} hours.'.format(elapsedTime/3600))
     Medium.close()
-    elapsedTime = time.time() - startTime
-    print('Done! Runtime: {0} hours.'.format(elapsedTime/3600))
